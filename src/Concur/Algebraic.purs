@@ -16,6 +16,7 @@ import Data.Functor.Variant as Variant
 import Data.Show (show)
 import Data.Tuple (Tuple(..))
 import Data.Unit (Unit, unit)
+import Data.Void (Void, absurd)
 import Run (Run(..))
 import Run as Run
 import Run.Choose (CHOOSE)
@@ -68,8 +69,6 @@ liftYield = Run.lift _yield
 yield :: forall r x. x -> Widget x r Unit
 yield x = liftYield (Tuple x unit)
 
--- NOTE: Need to use `run` instead of `resume`, because run loops, i.e. handler stays installed throughout the execution of the monad.
---       handle w f = Run.resume (Variant.on _yield (\ (Tuple x a) -> f x a) (runWrap <<< expandV)) pure w
 handle :: forall x r a. Widget x r a -> (x -> Widget x r a -> Widget x r a) -> Widget x r a
 handle w f = Run.run (Variant.on _yield (\ (Tuple x a) -> pure (f x a)) (Run.send <<< expandV)) w
   where
@@ -77,6 +76,12 @@ handle w f = Run.run (Variant.on _yield (\ (Tuple x a) -> pure (f x a)) (Run.sen
   expandV :: forall b. Variant.VariantF (WIDGET + CHOOSE + r) b -> Variant.VariantF (YIELD x + WIDGET + CHOOSE + r) b
   expandV = unsafeCoerce -- Variant.expand
 
+handleAndFinish :: forall x r. Widget x r Void -> Widget x r (Tuple x (Widget x r Void))
+handleAndFinish w = Run.resume (Variant.on _yield pure (runWrap <<< expandV <<< coerce)) absurd w
+  where
+  -- TODO: Figure out why Variant.expand doesn't work here
+  expandV :: forall b. Variant.VariantF (WIDGET + CHOOSE + r) b -> Variant.VariantF (YIELD x + WIDGET + CHOOSE + r) b
+  expandV = unsafeCoerce -- Variant.expand
 
 --------------------------------------------------------------------------------
 -- Sample program
@@ -107,6 +112,7 @@ stuff = forever do
 wrapper :: forall r a. Widget Unit r a
 wrapper = wrapper' 0 (counter <|> stuff)
   where
-  wrapper' :: Int -> Widget Unit r a -> Widget Unit r a
+  wrapper' :: Int -> Widget Unit r Void -> Widget Unit r a
   wrapper' n cont = do
-    text (show n) <|> handle cont \_unit -> wrapper' (n+1)
+    Tuple _ cont' <- text (show n) <|> handleAndFinish cont
+    wrapper' (n+1) cont'
